@@ -28,8 +28,10 @@ const TOKEN_FILE = path.join(os.tmpdir(), "chatgpt-bridge-token");
 function printHelp() {
   process.stderr.write(`
 Usage: chatgpt [options] "prompt"
+       chrome-bridge --extract
 
 Options:
+  -e, --extract           Extract data from the active browser tab (JSON to stdout)
   -f, --file <file>       Include file contents in the prompt (repeatable)
   -a, --attach <file>     Upload file to ChatGPT (PDF, images; repeatable)
   -b, --batch             Process each -f file as a separate request
@@ -39,11 +41,10 @@ Options:
   -h, --help              Show this help
 
 Examples:
+  chrome-bridge --extract                           # Extract data from active tab
   chatgpt "What is the meaning of life?"
   chatgpt -f code.py "Review this code"
-  cat file.txt | chatgpt "Summarize this"
   chatgpt -a scan.pdf "OCR this document and return JSON"
-  chatgpt -b -o '{name}.documented.py' -f *.py "Add docstrings"
 `);
 }
 
@@ -69,11 +70,11 @@ async function main() {
     process.exit(0);
   }
 
-  const { files, attachments, batch, outputPattern, timeout, promptText } = opts;
+  const { files, attachments, batch, extract, outputPattern, timeout, promptText } = opts;
   const stdinData = await readStdin();
 
   // Validate we have something to send
-  if (!promptText && files.length === 0 && attachments.length === 0 && !stdinData) {
+  if (!extract && !promptText && files.length === 0 && attachments.length === 0 && !stdinData) {
     printHelp();
     process.exit(1);
   }
@@ -182,9 +183,42 @@ async function main() {
       if (msg.type === "hello" && msg.client === "chatgpt-bridge") {
         clearTimeout(connectTimer);
         process.stderr.write("[cli] Extension connected.\n");
-        await processPrompts(ws, wss, prompts, timeout);
+        if (extract) {
+          await doExtract(ws, wss, timeout);
+        } else {
+          await processPrompts(ws, wss, prompts, timeout);
+        }
       }
     });
+  });
+}
+
+async function doExtract(ws, wss, timeout) {
+  const id = generateId();
+  process.stderr.write("[cli] Extracting page data...\n");
+  ws.send(JSON.stringify({ type: "extract_page", id }));
+
+  const responseTimer = setTimeout(() => {
+    process.stderr.write("[cli] Extract timeout.\n");
+    wss.close();
+    process.exit(1);
+  }, timeout);
+
+  ws.on("message", (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+
+    if (msg.type === "page_data") {
+      clearTimeout(responseTimer);
+      process.stdout.write(JSON.stringify(msg.data, null, 2) + "\n");
+      wss.close();
+      process.exit(0);
+    } else if (msg.type === "error" && msg.id === id) {
+      clearTimeout(responseTimer);
+      process.stderr.write(`[cli] Error: ${msg.error}\n`);
+      wss.close();
+      process.exit(1);
+    }
   });
 }
 

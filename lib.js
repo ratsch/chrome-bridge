@@ -10,6 +10,7 @@ function parseArgs(argv) {
   const files = [];
   const attachments = [];
   let batch = false;
+  let extract = false;
   let outputPattern = null;
   let timeout = 60 * 60_000;
   let promptText = null;
@@ -18,7 +19,9 @@ function parseArgs(argv) {
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "-f" || arg === "--file") {
+    if (arg === "-e" || arg === "--extract") {
+      extract = true;
+    } else if (arg === "-f" || arg === "--file") {
       i++;
       if (i < argv.length) files.push(argv[i]);
     } else if (arg === "-a" || arg === "--attach") {
@@ -43,7 +46,7 @@ function parseArgs(argv) {
     promptText = positional.pop();
     files.push(...positional);
   }
-  return { files, attachments, batch, outputPattern, timeout, promptText, token };
+  return { files, attachments, batch, extract, outputPattern, timeout, promptText, token };
 }
 
 function buildPrompt(prompt, fileContents) {
