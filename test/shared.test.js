@@ -1,4 +1,4 @@
-const { SwissPatterns, parsePrice, parseRooms, parseArea, extractAddress } = require("../extractors/shared");
+const { SwissPatterns, parsePrice, parseRooms, parseArea, extractAddress, trimToListing } = require("../extractors/shared");
 
 describe("parsePrice", () => {
   test("parses Swiss format with apostrophes", () => {
@@ -100,5 +100,36 @@ describe("SwissPatterns", () => {
   test("yearBuilt regex matches year", () => {
     expect("Baujahr: 2009").toMatch(SwissPatterns.yearBuilt);
     expect("Built: 1985").toMatch(SwissPatterns.yearBuilt);
+    expect("Year built:\n1773").toMatch(SwissPatterns.yearBuilt);
+  });
+
+  test("priceOnRequest matches common phrases", () => {
+    expect("On request").toMatch(SwissPatterns.priceOnRequest);
+    expect("Price on request").toMatch(SwissPatterns.priceOnRequest);
+    expect("Auf Anfrage").toMatch(SwissPatterns.priceOnRequest);
+    expect("Prix sur demande").toMatch(SwissPatterns.priceOnRequest);
+  });
+});
+
+describe("trimToListing", () => {
+  test("removes 'Other properties' section", () => {
+    const listing = "x".repeat(300) + "\nPrice: CHF 500'000";
+    const text = listing + "\n\nOther properties you might like\nCHF 3,800,000\n8.5 rooms";
+    const trimmed = trimToListing(text);
+    expect(trimmed).toContain("CHF 500'000");
+    expect(trimmed).not.toContain("3,800,000");
+  });
+
+  test("removes 'Contact the advertiser' section", () => {
+    const listing = "x".repeat(300) + "\nRooms: 5.5";
+    const text = listing + "\n\nContact the advertiser\nFirst name\nMonthly household income\nBelow CHF 3,000";
+    const trimmed = trimToListing(text);
+    expect(trimmed).toContain("Rooms: 5.5");
+    expect(trimmed).not.toContain("CHF 3,000");
+  });
+
+  test("preserves text when no cut markers found", () => {
+    const text = "Simple listing without recommendations";
+    expect(trimToListing(text)).toBe(text);
   });
 });

@@ -1,45 +1,25 @@
 /**
  * Shared Swiss property text patterns.
  *
- * Reusable regex patterns and extraction helpers for Swiss property listing sites.
- * Used by swiss-broker.js and site-specific extractors.
+ * Provides regex patterns and parse helpers for Swiss property listing text.
+ * These are available to downstream consumers via the extracted data, and
+ * also used by the extractor to trim page text to the listing content.
  */
 
 const SwissPatterns = {
-  // Price patterns: CHF 1'480'000, CHF 1,480,000, CHF 1'200.–/Mt., etc.
   price: /CHF\s*[\d'',.\s]+(?:\.–|–)?(?:\s*\/\s*(?:Mt\.|Monat|m\.|Mon\.))?/gi,
   priceValue: /CHF\s*([\d'',.\s]+)/i,
-
-  // Room patterns: 3.5 Zimmer, 4½ Zi., 2.5 rooms, etc.
+  priceOnRequest: /(?:on request|price on request|auf anfrage|preis auf anfrage|prix sur demande|su richiesta)/i,
   rooms: /(\d+[.,]?\d*)\s*(?:½\s*)?(?:Zimmer|Zi\.|rooms?)/i,
   roomsAlt: /(\d+[.,]?\d*)\s*(?:½\s*)?(?:pièces?|locali)/i,
-
-  // Area patterns: 91 m², 120m2, 85 m2, etc.
   area: /(\d+(?:[.,]\d+)?)\s*m[²2]/gi,
-  livingArea: /(?:Wohnfläche|Wohnfl\.|Living area|Surface habitable)\s*[:.]?\s*(\d+(?:[.,]\d+)?)\s*m[²2]/i,
+  livingArea: /(?:Wohnfläche|Wohnfl\.|Living area|Surface habitable|Floor space)\s*[:.]?\s*(\d+(?:[.,]\d+)?)\s*m[²2]/i,
   plotArea: /(?:Grundstückfläche|Grundstückfl\.|Plot area|Surface terrain|Grundstück)\s*[:.]?\s*(\d+(?:[.,]\d+)?)\s*m[²2]/i,
-
-  // Swiss PLZ (postal code): 4 digits, typically 1000-9999
   plz: /\b([1-9]\d{3})\s+([A-ZÀ-Ž][a-zà-ž\-]+(?:\s+[a-zà-ž\-]+)*)\b/g,
-
-  // Year built
-  yearBuilt: /(?:Baujahr|Built|Année de construction|Anno di costruzione)\s*[:.]?\s*(\d{4})/i,
-
-  // Floor
-  floor: /(?:Stockwerk|Stock|Etage|Floor|OG|UG|EG)\s*[:.]?\s*(\d+|EG|UG)/i,
-
-  // Availability
-  availability: /(?:Bezug|Available|Disponible|Verfügbar)\s*[:.]?\s*(.+?)(?:\n|$)/i,
-
-  // Reference/Object number
-  referenceId: /(?:Objekt-?Nr\.|Ref\.|Reference|Referenz)\s*[:.]?\s*(\S+)/i,
+  yearBuilt: /(?:Baujahr|Built|Year built|Année de construction|Anno di costruzione|Year of construction)\s*[:.]?\s*(\d{4})/i,
+  referenceId: /(?:Objekt-?Nr\.|Object ref\.|Ref\.|Reference|Referenz|Listing ID)\s*[:.]?\s*(\S+)/i,
 };
 
-/**
- * Parse a Swiss price string to a number.
- * "CHF 1'480'000" → 1480000
- * "CHF 2'500.–/Mt." → 2500
- */
 function parsePrice(str) {
   if (!str) return null;
   const match = str.match(SwissPatterns.priceValue);
@@ -49,11 +29,6 @@ function parsePrice(str) {
   return isNaN(num) ? null : num;
 }
 
-/**
- * Parse a room count string.
- * "3.5 Zimmer" → 3.5
- * "4½ Zi." → 4.5
- */
 function parseRooms(str) {
   if (!str) return null;
   const match = str.match(SwissPatterns.rooms) || str.match(SwissPatterns.roomsAlt);
@@ -63,10 +38,6 @@ function parseRooms(str) {
   return parseFloat(val);
 }
 
-/**
- * Parse an area string in m².
- * "91 m²" → 91
- */
 function parseArea(str) {
   if (!str) return null;
   const match = str.match(/(\d+(?:[.,]\d+)?)\s*m[²2]/);
@@ -74,24 +45,41 @@ function parseArea(str) {
   return parseFloat(match[1].replace(",", "."));
 }
 
-/**
- * Extract address from text using Swiss PLZ pattern.
- * Returns { street, plz, city } or null.
- */
 function extractAddress(text) {
   if (!text) return null;
   const match = text.match(SwissPatterns.plz);
   if (!match) return null;
-  // Try to get street from context
-  const plzMatch = text.match(/(.+?)\b([1-9]\d{3})\s+([A-ZÀ-Ž][a-zà-ž\-]+(?:\s+[a-zà-ž\-]+)*)/);
+  const plzMatch = text.match(/([A-ZÀ-Ža-zà-ž][\w\s.,\-]+?)\s*[,\n]\s*([1-9]\d{3})\s+([A-ZÀ-Ž][a-zà-ž\-]+(?:\s+[a-zà-ž\-]+)*)/);
   if (plzMatch) {
     return {
-      street: plzMatch[1].replace(/[,\n]+$/, "").trim(),
+      street: plzMatch[1].replace(/[,\n\s]+$/, "").trim(),
       plz: plzMatch[2],
       city: plzMatch[3].trim(),
     };
   }
   return null;
+}
+
+/**
+ * Trim page text to the main listing content by removing recommendation
+ * sections, contact forms, and footers that pollute pattern matching.
+ */
+function trimToListing(text) {
+  const cutMarkers = [
+    /\n\s*(?:Other properties|Ähnliche Objekte|Andere Immobilien|Weitere Objekte|Autres biens|Similar listings|You might also like)/i,
+    /\n\s*(?:Fraud prevention|Betrugshinweis|Prévention de la fraude)/i,
+    /\n\s*(?:Tips and services|Tipps und Services)/i,
+    /\n\s*(?:Report listing|Inserat melden)/i,
+    /\n\s*(?:Contact the advertiser|Kontakt aufnehmen|Contacter l'annonceur)/i,
+  ];
+  let trimmed = text;
+  for (const marker of cutMarkers) {
+    const idx = trimmed.search(marker);
+    if (idx > 200) {
+      trimmed = trimmed.slice(0, idx);
+    }
+  }
+  return trimmed;
 }
 
 // ── Expose globally for other extractors ────────────────────────────────────
@@ -103,10 +91,9 @@ if (typeof window !== "undefined") {
   window.__chromeBridge.parseRooms = parseRooms;
   window.__chromeBridge.parseArea = parseArea;
   window.__chromeBridge.extractAddress = extractAddress;
+  window.__chromeBridge.trimToListing = trimToListing;
 }
 
-// ── Exports for testing ─────────────────────────────────────────────────────
-
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { SwissPatterns, parsePrice, parseRooms, parseArea, extractAddress };
+  module.exports = { SwissPatterns, parsePrice, parseRooms, parseArea, extractAddress, trimToListing };
 }
