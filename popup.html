@@ -29,10 +29,16 @@
   <hr>
 
   <div id="connection-section">
-    <div class="label">Connections</div>
+    <div class="label">Connection</div>
     <div id="ws-status" class="conn-line">
       <span class="dot disconnected"></span>
       WebSocket: Disconnected
+    </div>
+
+    <label for="auth-token">Auth token</label>
+    <div class="row">
+      <input id="auth-token" type="password" placeholder="shared secret">
+      <button id="save-token-btn" class="secondary-btn">Save</button>
     </div>
   </div>
 

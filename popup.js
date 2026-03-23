@@ -117,6 +117,33 @@ copyBtn.addEventListener("click", async () => {
 extractBtn.addEventListener("click", doExtract);
 extractBtnEmpty.addEventListener("click", doExtract);
 
+// ── Token config ────────────────────────────────────────────────────────────
+
+const tokenInput = document.getElementById("auth-token");
+const saveTokenBtn = document.getElementById("save-token-btn");
+
+chrome.storage.local.get(["authToken"], (data) => {
+  if (data.authToken) tokenInput.value = data.authToken;
+});
+
+saveTokenBtn.addEventListener("click", () => {
+  const token = tokenInput.value.trim();
+  chrome.storage.local.set({ authToken: token });
+  // Reconnect with new token
+  chrome.runtime.sendMessage({ type: "disconnect" });
+  setTimeout(() => {
+    chrome.storage.local.get(["relayUrl"], (data) => {
+      chrome.runtime.sendMessage({
+        type: "connect",
+        url: data.relayUrl || "ws://localhost:9223",
+        token,
+      });
+    });
+  }, 300);
+  saveTokenBtn.textContent = "Saved!";
+  setTimeout(() => { saveTokenBtn.textContent = "Save"; }, 1500);
+});
+
 // ── Connection status ───────────────────────────────────────────────────────
 
 function refreshStatus() {
