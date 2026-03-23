@@ -1,110 +1,162 @@
-# Plan F: Chrome Bridge Extension
+# Chrome Bridge — Design Document
 
-**Repo:** `~/git/services/chatgpt-bridge` → rename to `chrome-bridge`
-**Dependency:** Plan B (backend API with `POST /listings` endpoint)
+**Repo:** `~/git/services/chrome-bridge`
+**Based on:** `~/git/services/chatgpt-bridge` (to be migrated)
 **Effort:** 1-2 days
 
 ## Overview
 
-Extend the existing `chatgpt-bridge` Chrome extension into a multi-site bridge that:
-1. Continues to work as a ChatGPT web UI bridge (existing functionality)
-2. Continues to support OCR via `--attach` / `ocr.sh` (existing)
-3. Continues to support relay server integration for phone PWA (existing)
-4. Adds property listing extraction from Swiss real estate portals
-5. Sends extracted listing data to the property portal backend API
-6. Provides one-click import from any property page you're browsing
+A Chrome extension that provides **generic browser automation capabilities** to external consumers. It does two things:
 
-This solves the bot detection problem — Homegate, ImmoScout, and others block Playwright automation but cannot detect a Chrome extension running in your normal browser session.
+1. **Extract** structured data from the current page (site-specific extractors)
+2. **Inject** content into web pages (type text, click buttons, read responses)
 
-## Critical Technical Constraints
+The extension doesn't know or care what the data is used for. It's a bridge between the browser DOM and external tools. The consumers decide the purpose:
 
-1. **No dynamic imports** in content scripts — Manifest V3 forbids `import()` in content scripts. All extractors must be bundled into a single file or injected via `chrome.scripting.executeScript` from the background worker.
-2. **Two independent communication channels**: WebSocket (ChatGPT ↔ CLI/relay) and REST (property → backend API). These must not interfere with each other in background.js.
-3. **Content scripts are site-specific** — the ChatGPT content script (`chatgpt/content.js`) must only run on `chatgpt.com`. The property content script must NOT load on `chatgpt.com` and vice versa. The manifest already enforces this via separate `content_scripts` entries.
-4. **Existing test suite** must pass — `test/lib.test.js`, `test/content.test.js`, `test/integration.test.js` must not break.
-5. **Backend create endpoint needed** — Plan B must implement `POST /listings/import` for the extension to create new listings. This endpoint does not exist yet.
-
-## Requirements
-
-### R1: ChatGPT bridge must continue working
-- ALL existing functionality preserved: message sending/receiving, streaming, file attachments (`--attach`), OCR (`ocr.sh`), batch mode, relay server integration
-- Same CLI interface (`cli.js`) unchanged
-- Same WebSocket protocol unchanged
-- Same auth token mechanism unchanged
-
-### R2: Detect property portal sites automatically
-- When you navigate to a supported property portal, the extension activates
-- No manual action needed — it just detects you're on a listing page
-- Shows a small badge/icon indicating "property data available"
-
-### R3: Extract listing data from page DOM
-- Parse the rendered page (not raw HTML — the page is already rendered by your browser)
-- Extract all available property fields: price, rooms, sqm, address, PLZ, year built, features, photos, agent contact, description
-- Use shared Swiss extraction patterns (CHF price formatting, PLZ+municipality, etc.)
-- Handle "Preis auf Anfrage" (price on request)
-- Detect Zweitwohnung/Erstwohnung status
-
-### R4: One-click import to property portal
-- Extension popup shows extracted data for review
-- "Import" button sends to backend API: `POST https://md.example.ts.net/listings`
-- Pre-fills all available fields
-- Shows confirmation: "Imported: Bildweg 12, 7250 Klosters"
-- Dedup: warns if property already exists in the portal
-
-### R5: Work across all target portals
-- Must support: homegate.ch, immoscout24.ch, comparis.ch, newhome.ch, engelvoelkers.com, neho.ch, betterhomes.ch, remax.ch, sothebysrealty.com, raiffeisen.ch
-- Must support Klosters local brokers: fross.ch, hodel-immo.ch, ambuehl-immo.ch, rki.ch, teresas-homes.ch, ginesta.ch
-- Generic fallback for unknown sites: try JSON-LD, OpenGraph, visible text patterns
-
-### R6: Minimal footprint
-- No background activity when not on a property page
-- No tracking, no external calls except to our own backend
-- Extension icon changes state: grey (inactive), green (property data found), blue (ChatGPT mode)
-
-## Architecture
+- A CLI tool uses inject+extract on chatgpt.com → that's a ChatGPT bridge
+- A CLI tool uses inject+extract on chatgpt.com with a specific OCR prompt → that's an OCR tool
+- A property portal uses extract on homegate.ch → that's a listing importer
+- Any future tool can use the same capabilities
 
 ```
-chrome-bridge/
-├── manifest.json              # Manifest V3, matches all supported sites + chatgpt.com
-├── background.js              # Service worker: routes messages, manages connections
-│                              #   ChatGPT: WebSocket relay (existing)
-│                              #   Property: REST API calls to backend
-├── content.js                 # Dispatcher: detects site, loads right extractor
-├── extractors/
-│   ├── shared.js              # Swiss property extraction patterns (ported from Python extractors.py)
-│   │                          #   - CHF price parsing (including U+2019 thin space)
-│   │                          #   - Rooms (3.5 Zimmer, 5½-Zimmer)
-│   │                          #   - Area (m²)
-│   │                          #   - PLZ + municipality (multi-word: "Saas im Prättigau")
-│   │                          #   - Year built, heating type, parking
-│   │                          #   - Zweitwohnung/Erstwohnung detection
-│   │                          #   - JSON-LD extraction
-│   │                          #   - OpenGraph meta tag extraction
-│   │                          #   - Photo URL extraction
-│   ├── homegate.js            # Homegate-specific selectors + extraction
-│   ├── immoscout.js           # ImmoScout24-specific
-│   ├── comparis.js            # Comparis-specific
-│   ├── newhome.js             # Newhome-specific
-│   ├── engelvoelkers.js       # E&V listing pages
-│   ├── neho.js                # Neho-specific
-│   ├── betterhomes.js         # BETTERHOMES-specific
-│   ├── remax.js               # RE/MAX-specific
-│   ├── brokers.js             # Generic broker sites (fross, hodel, ambühl, rki, teresas, ginesta)
-│   └── generic.js             # Fallback: JSON-LD → OG → text patterns
-├── chatgpt/
-│   ├── content.js             # Existing ChatGPT content script (moved here)
-│   └── selectors.js           # ChatGPT DOM selectors (extracted from existing)
-├── popup.html                 # Extension popup UI
-├── popup.js                   # Popup logic: show extracted data, import button
-├── popup.css                  # Popup styling
-├── api.js                     # Backend API client (REST calls to property portal)
-├── lib.js                     # Shared utilities (existing)
-├── cli.js                     # Existing CLI for ChatGPT bridge
-└── icons/
-    ├── icon-grey-48.png       # Inactive
-    ├── icon-green-48.png      # Property data found
-    └── icon-blue-48.png       # ChatGPT mode
+┌─────────────────────────────────────────────────┐
+│  Chrome Extension (chrome-bridge)                │
+│                                                   │
+│  Capabilities:                                    │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
+│  │ Extract  │  │ Inject   │  │ Site-Specific│   │
+│  │ data from│  │ content  │  │ Extractors   │   │
+│  │ page DOM │  │ into DOM │  │ (pluggable)  │   │
+│  └──────────┘  └──────────┘  └──────────────┘   │
+│                                                   │
+│  Protocol: WebSocket + chrome.runtime messages    │
+│  Auth: per-connection token                       │
+└──────────────────────┬────────────────────────────┘
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+          ▼            ▼            ▼
+     CLI tool     Portal UI    Any future
+     (chatgpt,   (import      consumer
+      ocr.sh)    listing)
 ```
+
+## Core Abstraction
+
+The extension exposes a **capability-based protocol**, not a use-case-based one:
+
+### Messages TO the extension (from any consumer)
+
+| Message | Description |
+|---------|-------------|
+| `extract_page` | Extract structured data from the current page using the matching site extractor. Returns the extracted data. |
+| `inject_text` | Type text into an input field on the page (identified by selector). |
+| `click` | Click an element (identified by selector). |
+| `read_element` | Read text content of an element. |
+| `watch_element` | Stream text changes from an element (for ChatGPT streaming). |
+| `get_page_info` | Return current URL, title, detected site type. |
+| `upload_file` | Inject a file into a file input (for ChatGPT attachments). |
+
+### Messages FROM the extension (to consumer)
+
+| Message | Description |
+|---------|-------------|
+| `page_data` | Extracted structured data (response to `extract_page`). |
+| `stream_delta` | Incremental text change (response to `watch_element`). |
+| `stream_done` | Element stopped changing. |
+| `status` | Connection status, current page info. |
+| `error` | Something went wrong. |
+
+### What the extension does NOT know about
+
+- OCR prompts or JSON schemas
+- Property listing databases or APIs
+- Houzy, Homegate, or any backend service
+- What the consumer does with the extracted data
+- How to score, store, or display anything
+
+## Site Extractors
+
+Extractors are pluggable modules that know how to read structured data from specific websites. They return a generic key-value data object — the extension doesn't interpret the contents.
+
+```javascript
+// An extractor returns whatever structured data it can find on the page
+// The consumer decides what the fields mean
+
+{
+  type: "property_listing",  // or "chat_message", or "search_results", etc.
+  source: "homegate.ch",
+  url: "https://www.homegate.ch/kaufen/12345",
+  data: {
+    // Site-specific fields — the extension just extracts them
+    price: "CHF 1'480'000",
+    rooms: "3.5",
+    area: "91 m²",
+    address: "Bildweg 12, 7250 Klosters",
+    // ... whatever the extractor finds
+  },
+  raw_text: "...",  // Full page text as fallback
+  json_ld: [...],   // JSON-LD if present
+  meta: {...},      // OpenGraph/meta tags
+  photos: [...],    // Image URLs found on page
+}
+```
+
+### Extractor Registry
+
+```
+extractors/
+├── shared.js           # Swiss text patterns (CHF, PLZ, m², Zimmer)
+├── chatgpt.js          # ChatGPT: input field, response elements, streaming
+├── homegate.js         # Homegate listing page structure
+├── immoscout.js        # ImmoScout24
+├── engelvoelkers.js    # E&V listing pages
+├── neho.js             # Neho
+├── swiss-broker.js     # Generic Swiss broker sites (fross, hodel, ambühl, etc.)
+└── generic.js          # Fallback: JSON-LD → OpenGraph → text patterns
+```
+
+Adding a new site = adding one JS file. No changes to the extension core.
+
+## Communication Channels
+
+The extension supports multiple simultaneous consumers via separate connections:
+
+### Channel 1: WebSocket (existing, for CLI tools)
+
+```
+CLI (chatgpt, ocr.sh, future tools)
+  ← WebSocket → background.js service worker
+  ← chrome.runtime.sendMessage → content script
+  ← DOM → web page
+```
+
+The CLI sends `inject_text` + `watch_element` to drive ChatGPT.
+The CLI sends `extract_page` to read data from any page.
+The extension doesn't know the CLI is doing "OCR" — it just follows instructions.
+
+### Channel 2: chrome.runtime messaging (for web apps)
+
+```
+Web app (property portal at your-app.example.com)
+  ← chrome.runtime.sendMessage (externally_connectable) → background.js
+  ← chrome.runtime.sendMessage → content script
+  ← DOM → web page
+```
+
+The portal sends `extract_page` when user clicks "Import from browser".
+The extension returns the page data. The portal decides what to do with it.
+
+### Channel 3: Popup UI (for manual use)
+
+```
+User clicks extension icon
+  → popup.js asks content script for extract_page
+  → Shows extracted data
+  → "Copy JSON" button copies to clipboard
+```
+
+No backend connection needed. User can paste the JSON wherever they want.
 
 ## Manifest
 
@@ -113,9 +165,10 @@ chrome-bridge/
   "manifest_version": 3,
   "name": "Chrome Bridge",
   "version": "0.2.0",
-  "description": "ChatGPT bridge + Swiss property listing importer",
+  "description": "Generic browser data extraction and injection bridge",
 
   "permissions": ["storage", "activeTab", "scripting"],
+
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://*.oaiusercontent.com/*",
@@ -135,9 +188,16 @@ chrome-bridge/
     "https://ambuehl-immo.ch/*",
     "https://rki.ch/*",
     "https://www.teresas-homes.ch/*",
-    "https://www.ginesta.ch/*",
-    "https://md.example.ts.net/*"
+    "https://www.ginesta.ch/*"
   ],
+
+  "externally_connectable": {
+    "matches": [
+      "https://your-app.example.com/*",
+      "https://your-app.example.com/*",
+      "http://localhost:*/*"
+    ]
+  },
 
   "background": {
     "service_worker": "background.js"
@@ -146,15 +206,14 @@ chrome-bridge/
   "content_scripts": [
     {
       "matches": ["https://chatgpt.com/*"],
-      "js": ["chatgpt/content.js"],
+      "js": ["extractors/chatgpt.js", "content.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
-        "https://www.homegate.ch/kaufen/*",
-        "https://www.homegate.ch/mieten/*",
+        "https://www.homegate.ch/*",
         "https://www.immoscout24.ch/*",
-        "https://www.comparis.ch/immobilien/*",
+        "https://www.comparis.ch/*",
         "https://www.newhome.ch/*",
         "https://www.engelvoelkers.com/*",
         "https://www.neho.ch/*",
@@ -167,7 +226,7 @@ chrome-bridge/
         "https://www.teresas-homes.ch/*",
         "https://www.ginesta.ch/*"
       ],
-      "js": ["extractors/shared.js", "content.js"],
+      "js": ["extractors/shared.js", "extractors/swiss-broker.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
@@ -179,331 +238,145 @@ chrome-bridge/
 }
 ```
 
-## Content Script Flow (Property Mode)
-
-**NOTE:** Dynamic `import()` is forbidden in MV3 content scripts. All extractors are bundled into a single `property-content.js` file (via a build step or manual concatenation). Site detection uses a simple if/else chain, not dynamic loading.
-
-```javascript
-// property-content.js — bundled file containing shared.js + all site extractors
-// Injected ONLY into property portal pages (NOT chatgpt.com)
-
-const SITE_EXTRACTORS = {
-  'homegate.ch':        HomegateExtractor,
-  'immoscout24.ch':     ImmoScoutExtractor,
-  'comparis.ch':        ComparisExtractor,
-  'newhome.ch':         NewhomeExtractor,
-  'engelvoelkers.com':  EngelVoelkersExtractor,
-  'neho.ch':            NehoExtractor,
-  'betterhomes.ch':     GenericSwissExtractor,
-  'remax.ch':           GenericSwissExtractor,
-  'fross.ch':           GenericSwissExtractor,
-  'hodel-immo.ch':      GenericSwissExtractor,
-  'ambuehl-immo.ch':    GenericSwissExtractor,
-  'rki.ch':             GenericSwissExtractor,
-  'teresas-homes.ch':   GenericSwissExtractor,
-  'ginesta.ch':         GenericSwissExtractor,
-};
-
-async function extractListing() {
-  const hostname = window.location.hostname.replace('www.', '');
-
-  // Find matching extractor
-  let extractorLoader = null;
-  for (const [domain, loader] of Object.entries(SITE_EXTRACTORS)) {
-    if (hostname.includes(domain)) {
-      extractorLoader = loader;
-      break;
-    }
-  }
-
-  // Use generic fallback if no match
-  if (!extractorLoader) {
-    extractorLoader = () => import('./extractors/generic.js');
-  }
-
-  const extractor = await extractorLoader();
-  const listing = extractor.extract(document, window.location.href);
-
-  // Enrich with shared patterns (JSON-LD, OG tags, text patterns)
-  const enriched = SharedExtractor.enrich(listing, document);
-
-  // Send to background
-  chrome.runtime.sendMessage({
-    type: 'property_extracted',
-    data: enriched,
-    url: window.location.href,
-    source: hostname,
-  });
-}
-
-// Auto-extract on page load
-extractListing();
-
-// Re-extract on SPA navigation (for React/Angular sites like Homegate)
-const observer = new MutationObserver(() => {
-  clearTimeout(window._extractTimeout);
-  window._extractTimeout = setTimeout(extractListing, 2000);
-});
-observer.observe(document.body, { childList: true, subtree: true });
-```
-
-## Shared Extractor (JS port of Python extractors.py)
-
-```javascript
-// extractors/shared.js
-
-const SharedExtractor = {
-  // Price patterns — CHF with Swiss formatting (U+2019 as thousand separator)
-  extractPrice(text) {
-    const patterns = [
-      /(?:CHF|Fr\.)\s*([\d'''\u2018\u2019.,]+)/i,
-      /(?:Kaufpreis|Verkaufspreis|Price)\s*:?\s*(?:CHF)?\s*([\d'''\u2018\u2019.,]+)/i,
-    ];
-    for (const pat of patterns) {
-      const m = text.match(pat);
-      if (m) {
-        const price = parseInt(m[1].replace(/[''\u2018\u2019.,]/g, ''));
-        if (price > 10000) return { price, known: true };
-      }
-    }
-    if (/Preis auf Anfrage|Price on request/i.test(text)) {
-      return { price: null, known: false };
-    }
-    return { price: null, known: false };
-  },
-
-  // Rooms: "3.5 Zimmer"
-  extractRooms(text) { ... },
-
-  // Area: "120 m²"
-  extractArea(text) { ... },
-
-  // PLZ + municipality
-  extractLocation(text) { ... },
-
-  // Year built
-  extractYear(text) { ... },
-
-  // Zweitwohnung/Erstwohnung
-  extractZweitwohnung(text) { ... },
-
-  // JSON-LD
-  extractJsonLd(document) { ... },
-
-  // OpenGraph
-  extractOpenGraph(document) { ... },
-
-  // Photos
-  extractPhotos(document) { ... },
-
-  // Merge all into listing object
-  enrich(listing, document) {
-    const text = document.body.innerText;
-    if (!listing.price) Object.assign(listing, this.extractPrice(text));
-    if (!listing.rooms) listing.rooms = this.extractRooms(text);
-    // ... etc
-    return listing;
-  },
-};
-```
+**Note:** Site-specific extractors (homegate.js, etc.) are loaded via `chrome.scripting.executeScript` from the background worker when needed, not via static content_scripts. The static entry loads only `shared.js` (patterns) + `swiss-broker.js` (generic) + `content.js` (dispatcher). The dispatcher checks the hostname and asks the background to inject the site-specific extractor if available.
 
 ## Popup UI
 
-The popup is **sectioned**, showing the relevant section based on current tab:
+The popup is a simple data viewer — it shows what the extension extracted from the current tab and lets you copy it:
 
-**When on a property portal page:**
-```
-┌─────────────────────────────────────────┐
-│  🏠 Property Found                      │
-│                                          │
-│  Bildweg 12, 7250 Klosters              │
-│  CHF 1,480,000 · 3.5 Zi · 91 m²        │
-│  Built 2009 · STWE · Zweitwohnung OK    │
-│                                          │
-│  ☀️ Mountain view · 🅿️ 2 parking        │
-│  🔥 Oil heating · 🏔️ 1,182m altitude    │
-│                                          │
-│  Source: neho.ch                         │
-│  Completeness: 83%                       │
-│                                          │
-│  [   Import to Portal   ]  [ Dismiss ]  │
-│                                          │
-│  ─────────────────────────────────────   │
-│  🤖 ChatGPT Bridge: ● Connected         │
-│  📋 Portal API: ● Connected             │
-└─────────────────────────────────────────┘
-```
-
-**When on chatgpt.com:**
-```
-┌─────────────────────────────────────────┐
-│  🤖 ChatGPT Bridge                      │
-│                                          │
-│  Server: ws://localhost:9223             │
-│  Token:  ●●●●●●●●                       │
-│  Status: ● Connected                    │
-│                                          │
-│  [ Disconnect ]                          │
-│                                          │
-│  ─────────────────────────────────────   │
-│  📋 Property Portal: ● Connected        │
-└─────────────────────────────────────────┘
-```
-
-**When on any other page:**
 ```
 ┌─────────────────────────────────────────┐
 │  Chrome Bridge                           │
 │                                          │
-│  🤖 ChatGPT: ● Connected               │
-│  📋 Portal:  ● Connected               │
+│  Current page: homegate.ch/kaufen/...    │
+│  Detected: Property Listing              │
 │                                          │
-│  Navigate to a property listing or       │
-│  chatgpt.com to use the bridge.          │
+│  Extracted data:                         │
+│  ┌─────────────────────────────────────┐ │
+│  │ Address: Bildweg 12, 7250 Klosters │ │
+│  │ Price:   CHF 1,480,000             │ │
+│  │ Rooms:   3.5                       │ │
+│  │ Area:    91 m²                     │ │
+│  │ Year:    2009                      │ │
+│  │ ...                                │ │
+│  └─────────────────────────────────────┘ │
+│                                          │
+│  [  Copy JSON  ]  [  Re-extract  ]      │
+│                                          │
+│  ─── Connections ──────────────────────  │
+│  WebSocket: ● Connected (localhost:9223) │
+│  External:  1 listener                   │
 └─────────────────────────────────────────┘
 ```
+
+No "Import to Portal" button — the extension doesn't know about portals. The portal's frontend requests data via `externally_connectable`.
+
+## How Consumers Use It
+
+### Consumer 1: CLI (existing ChatGPT bridge)
+
+```bash
+# The CLI sends inject_text + watch_element — unchanged from today
+chatgpt "What is 2+2?"
+
+# OCR is just a specific prompt + file attachment — the extension doesn't know it's OCR
+./ocr.sh document.pdf
+
+# Future: extract data from current browser tab
+chrome-bridge extract  # → prints JSON to stdout
 ```
 
-## Backend API Integration
-
-Two separate auth systems — stored independently in `chrome.storage.sync`:
-
-| Channel | Auth | Stored As |
-|---------|------|-----------|
-| ChatGPT Bridge | Shared token (`--token mytoken`) | `chrome.storage.sync.chatgpt_token` (existing) |
-| Property Portal | API key for mail-done backend | `chrome.storage.sync.portal_api_key` |
-
-These are completely independent — changing one doesn't affect the other.
+### Consumer 2: Property Portal Frontend
 
 ```javascript
-// api.js — Property portal REST client (separate from ChatGPT WebSocket)
+// In the portal's React/Next.js code (your-app.example.com)
+// Uses chrome.runtime.sendMessage with the extension ID
 
-const API_BASE = 'https://md.example.ts.net';
-// API key configured in popup settings, stored in chrome.storage.sync
+const EXTENSION_ID = "abcdef...";  // Set during extension install
 
-async function importListing(listing) {
-  // Check for duplicates first
-  const existing = await fetch(`${API_BASE}/listings?search=${encodeURIComponent(listing.address)}&plz=${listing.plz}`);
-  const data = await existing.json();
+async function importFromBrowser() {
+  const response = await chrome.runtime.sendMessage(
+    EXTENSION_ID,
+    { type: "extract_page" }
+  );
 
-  if (data.items.length > 0) {
-    return { status: 'duplicate', existing: data.items[0] };
+  if (response.type === "property_listing") {
+    // POST to our own backend
+    await fetch("/api/listings/import", {
+      method: "POST",
+      body: JSON.stringify(response.data),
+    });
   }
-
-  // Create new listing
-  const resp = await fetch(`${API_BASE}/listings`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${API_KEY}`,
-    },
-    body: JSON.stringify({
-      address: listing.address,
-      plz: listing.plz,
-      municipality: listing.municipality,
-      listing_url: listing.url,
-      listing_source: listing.source,
-      price_chf: listing.price,
-      price_known: listing.priceKnown,
-      living_area_sqm: listing.area,
-      rooms: listing.rooms,
-      year_built: listing.yearBuilt,
-      property_type: listing.propertyType,
-      description: listing.description,
-      photo_urls: listing.photos,
-      agent_name: listing.agentName,
-      agent_email: listing.agentEmail,
-      agent_phone: listing.agentPhone,
-      // ... all other fields
-    }),
-  });
-
-  return await resp.json();
 }
 ```
 
-## Site-Specific Extractors
+### Consumer 3: Manual (popup)
 
-Each extractor knows where data lives on that portal's DOM:
-
-### Homegate Example
-
-```javascript
-// extractors/homegate.js
-
-export function extract(document, url) {
-  const listing = { source: 'homegate', url };
-
-  // Homegate uses specific CSS classes/data attributes
-  // These need to be discovered by inspecting the actual page
-
-  // Price
-  const priceEl = document.querySelector('[data-test="price"], .HgPriceModule');
-  if (priceEl) {
-    Object.assign(listing, SharedExtractor.extractPrice(priceEl.textContent));
-  }
-
-  // Address
-  const addressEl = document.querySelector('[data-test="address"], .AddressDetails');
-  if (addressEl) {
-    Object.assign(listing, SharedExtractor.extractLocation(addressEl.textContent));
-    listing.address = addressEl.textContent.trim();
-  }
-
-  // Details table (rooms, area, year, etc.)
-  const detailRows = document.querySelectorAll('.SpacedTable tr, [data-test="attributes"] li');
-  for (const row of detailRows) {
-    const text = row.textContent;
-    if (/Zimmer|rooms/i.test(text)) listing.rooms = SharedExtractor.extractRooms(text);
-    if (/Fläche|area|m²/i.test(text)) listing.area = SharedExtractor.extractArea(text);
-    if (/Baujahr|Built/i.test(text)) listing.yearBuilt = SharedExtractor.extractYear(text);
-    // ... etc
-  }
-
-  // Photos
-  listing.photos = SharedExtractor.extractPhotos(document);
-
-  // Description
-  const descEl = document.querySelector('[data-test="description"], .Description');
-  if (descEl) listing.description = descEl.textContent.trim();
-
-  return listing;
-}
-```
-
-**NOTE:** The exact CSS selectors for each portal need to be discovered by inspecting the live pages. The selectors above are approximations — the implementing agent should inspect each portal and update them.
-
-## Backend Changes Required
-
-Plan B needs one additional endpoint (or adapt the existing create flow):
-
-```
-POST /listings/import
-  Accept a listing from the Chrome extension.
-  Similar to what reprocess_listings.py creates, but triggered by REST API.
-  Handles dedup, scenario assignment, and returns the created listing.
-```
-
-This can also be the existing `POST /listings` endpoint if Plan B implements it.
+User clicks extension → sees extracted data → clicks "Copy JSON" → pastes wherever.
 
 ## Migration from chatgpt-bridge
 
-1. **Rename repo**: `chatgpt-bridge` → `chrome-bridge`
-2. **Move existing code**: `content.js` → `chatgpt/content.js`, update manifest
-3. **Add property extraction**: new `content.js` dispatcher + `extractors/` directory
-4. **Extend popup**: show property data when on a listing page, ChatGPT status at bottom
-5. **Test**: verify ChatGPT bridge still works after refactoring
-6. **Update deploy**: re-load extension in Chrome
+1. **Copy repo**: `chatgpt-bridge/` → `chrome-bridge/`
+2. **Restructure files**: Move ChatGPT-specific code into `extractors/chatgpt.js`
+3. **Generalize content.js**: Site detection dispatcher instead of ChatGPT-only
+4. **Generalize background.js**: Route messages by type, not by assumption
+5. **Add property extractors**: `shared.js`, `homegate.js`, `swiss-broker.js`, etc.
+6. **Update popup**: Generic data viewer instead of ChatGPT-specific config
+7. **Keep CLI unchanged**: `cli.js` sends the same WebSocket messages — works as before
+8. **Keep tests**: Update to reflect new file structure, same test coverage
+
+### What changes for existing chatgpt-bridge users
+
+**Nothing.** The CLI, WebSocket protocol, auth token, and ChatGPT interaction are all preserved. The extension just gains additional capabilities on other sites. The chatgpt.com content script is identical to the current one.
+
+## Technical Constraints
+
+- **Manifest V3**: No dynamic `import()` in content scripts. Use `chrome.scripting.executeScript` for site-specific extractors or bundle them.
+- **Content script isolation**: ChatGPT and property content scripts run in separate tabs, never conflict. Enforced by manifest `matches`.
+- **No persistent background**: MV3 service workers can die. WebSocket reconnection logic (existing) handles this.
+- **externally_connectable**: Only whitelisted origins can message the extension. The portal URL must be listed in the manifest.
+
+## Files
+
+```
+chrome-bridge/
+├── manifest.json              # MV3, matches all supported sites
+├── background.js              # Service worker: WebSocket + message routing
+├── content.js                 # Generic dispatcher: detect site → extract
+├── extractors/
+│   ├── shared.js              # Swiss text patterns (reused across property sites)
+│   ├── chatgpt.js             # ChatGPT DOM interaction (existing content.js logic)
+│   ├── homegate.js            # Homegate-specific selectors
+│   ├── immoscout.js           # ImmoScout24-specific
+│   ├── engelvoelkers.js       # E&V listing pages
+│   ├── neho.js                # Neho-specific
+│   ├── swiss-broker.js        # Generic Swiss broker (covers fross, hodel, etc.)
+│   └── generic.js             # Fallback: JSON-LD → OG → text
+├── popup.html                 # Data viewer + connection status
+├── popup.js                   # Popup logic
+├── popup.css                  # Popup styling
+├── lib.js                     # Shared utilities (existing)
+├── cli.js                     # CLI entry point (existing, unchanged)
+├── ocr.sh                     # OCR helper (existing, unchanged)
+├── test/
+│   ├── lib.test.js            # Existing unit tests
+│   ├── content.test.js        # Existing DOM tests (update imports)
+│   └── integration.test.js    # Existing WebSocket tests
+├── docs/
+│   └── DESIGN.md              # This document
+├── package.json               # Node dependencies (existing)
+└── icons/                     # Extension icons
+```
 
 ## Implementation Steps
 
-1. **Restructure** — Move ChatGPT files, set up new directory structure (30 min)
-2. **Port shared extractor** — Translate `extractors.py` patterns to JavaScript (1 hour)
-3. **Build content.js dispatcher** — Site detection + extractor loading (30 min)
-4. **Build popup UI** — Show extracted data + import button (1 hour)
-5. **Build API client** — REST calls to backend with auth (30 min)
-6. **Build Homegate extractor** — Inspect live page, map selectors (1 hour)
-7. **Build generic extractor** — JSON-LD + OG + text fallback (30 min)
-8. **Build broker extractors** — Simple text-based for local sites (30 min)
-9. **Test end-to-end** — Extract from Homegate → import to portal (30 min)
-10. **Verify ChatGPT** — Ensure existing bridge still works (15 min)
+1. **Copy + restructure** — migrate from chatgpt-bridge, move files (30 min)
+2. **Generalize content.js** — site detection dispatcher (30 min)
+3. **Extract chatgpt.js** — move ChatGPT DOM logic into extractor module (30 min)
+4. **Port shared.js** — Swiss extraction patterns from Python `extractors.py` (1 hour)
+5. **Build swiss-broker.js** — generic extractor for property sites (30 min)
+6. **Build homegate.js** — Homegate-specific selectors (1 hour, needs page inspection)
+7. **Update popup** — generic data viewer with "Copy JSON" (30 min)
+8. **Add externally_connectable** — allow portal to request data (15 min)
+9. **Verify ChatGPT bridge** — run existing tests, test CLI manually (30 min)
+10. **Test property extraction** — open Homegate listing, verify extract (30 min)
