@@ -1,0 +1,19 @@
+{
+  "name": "chrome-bridge",
+  "version": "0.2.0",
+  "description": "Chrome extension for generic browser data extraction and injection",
+  "bin": {
+    "chatgpt": "./cli.js",
+    "chrome-bridge": "./cli.js"
+  },
+  "scripts": {
+    "test": "jest --forceExit"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  }
+}

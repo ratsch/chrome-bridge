@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h3>Chrome Bridge</h3>
+
+  <div id="page-info">
+    <div class="label">Current page</div>
+    <div id="page-url" class="value">—</div>
+    <div id="page-extractor" class="value secondary">No extractor</div>
+  </div>
+
+  <div id="data-section" class="hidden">
+    <div class="label">Extracted data</div>
+    <div id="data-view"></div>
+    <div class="row">
+      <button id="copy-btn">Copy JSON</button>
+      <button id="extract-btn" class="secondary-btn">Re-extract</button>
+    </div>
+  </div>
+
+  <div id="empty-section" class="hidden">
+    <div class="empty-msg">No data extracted from this page.</div>
+    <button id="extract-btn-empty">Extract Page</button>
+  </div>
+
+  <hr>
+
+  <div id="connection-section">
+    <div class="label">Connections</div>
+    <div id="ws-status" class="conn-line">
+      <span class="dot disconnected"></span>
+      WebSocket: Disconnected
+    </div>
+  </div>
+
+  <div id="log" class="hidden"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
