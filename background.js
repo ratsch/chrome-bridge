@@ -17,6 +17,11 @@ const MAX_LOG = 40;
 const DEFAULT_URL = "ws://localhost:9223";
 const RECONNECT_DELAY = 1000;
 
+// Track which message IDs originated from WebSocket, so we only
+// forward their responses back to WebSocket (not popup/external responses).
+const wsRequestIds = new Set();
+const WS_ID_MAX = 500;
+
 function log(msg) {
   const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
   logLines.push(line);
@@ -69,6 +74,15 @@ function connect(url, token) {
       return;
     }
 
+    // Track this request ID so we route the response back to WebSocket
+    if (msg.id) {
+      wsRequestIds.add(msg.id);
+      if (wsRequestIds.size > WS_ID_MAX) {
+        const first = wsRequestIds.values().next().value;
+        wsRequestIds.delete(first);
+      }
+    }
+
     log(`CLI → ${msg.type}: ${(msg.text || msg.selector || msg.url || "").slice(0, 60)}`);
     forwardToContentScript(msg);
   };
@@ -102,18 +116,53 @@ async function forwardToContentScript(msg, tabId) {
     }
   }
 
-  // Find the right tab based on current host_permissions matches
-  // Try to find a tab matching any of our content script patterns
+  // For WebSocket messages: prefer ChatGPT tab, then active tab, then any matching tab.
+  // This ensures CLI send_message always reaches ChatGPT, even if a property site is active.
+  //
+  // For non-WebSocket messages (popup, external): use active tab.
+  const isFromWs = msg.id && wsRequestIds.has(msg.id);
+
+  if (isFromWs) {
+    await forwardWsMessage(msg);
+  } else {
+    await forwardToActiveTab(msg);
+  }
+}
+
+async function forwardWsMessage(msg) {
   const tabs = await chrome.tabs.query({ currentWindow: true });
 
-  // Get host permissions to match against
-  const manifest = chrome.runtime.getManifest();
-  const patterns = (manifest.host_permissions || []).map(p => {
-    // Convert "https://chatgpt.com/*" to regex
-    return new RegExp(p.replace(/\*/g, ".*").replace(/\//g, "\\/"));
-  });
+  // First choice: ChatGPT tab (most CLI messages target ChatGPT)
+  const chatgptTab = tabs.find(t => t.url && t.url.includes("chatgpt.com"));
+  if (chatgptTab) {
+    try {
+      await chrome.tabs.sendMessage(chatgptTab.id, msg);
+      log("Message forwarded to ChatGPT tab");
+      return;
+    } catch {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: chatgptTab.id },
+          files: ["content.js"],
+        });
+        await new Promise((r) => setTimeout(r, 1500));
+        await chrome.tabs.sendMessage(chatgptTab.id, msg);
+        log("Message forwarded to ChatGPT tab after injection");
+        return;
+      } catch {}
+    }
+  }
 
-  // First, try the active tab
+  // Second choice: active tab if it matches a host_permission
+  await forwardToActiveTab(msg);
+}
+
+async function forwardToActiveTab(msg) {
+  const manifest = chrome.runtime.getManifest();
+  const patterns = (manifest.host_permissions || []).map(p =>
+    new RegExp(p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, ".*"))
+  );
+
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (activeTab && activeTab.url && patterns.some(p => p.test(activeTab.url))) {
     try {
@@ -121,7 +170,6 @@ async function forwardToContentScript(msg, tabId) {
       log("Message forwarded to active tab");
       return;
     } catch {
-      // Content script not ready in active tab, try injection
       try {
         await chrome.scripting.executeScript({
           target: { tabId: activeTab.id },
@@ -135,9 +183,9 @@ async function forwardToContentScript(msg, tabId) {
     }
   }
 
-  // Fallback: find any matching tab (prefer ChatGPT for send_message compatibility)
-  const chatgptTab = tabs.find(t => t.url && t.url.includes("chatgpt.com"));
-  const matchingTab = chatgptTab || tabs.find(t =>
+  // Last resort: any matching tab
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const matchingTab = tabs.find(t =>
     t.url && patterns.some(p => p.test(t.url))
   );
 
@@ -186,31 +234,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  // Popup requesting extract from active tab
-  if (msg.type === "popup_extract") {
-    (async () => {
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab) {
-          sendResponse({ error: "No active tab" });
-          return;
-        }
-        const response = await chrome.tabs.sendMessage(tab.id, {
-          type: "extract_page",
-          id: "popup-" + Date.now(),
-        });
-        sendResponse(response);
-      } catch (err) {
-        sendResponse({ error: err.message });
-      }
-    })();
-    return true; // async sendResponse
-  }
-
-  // Content script responses → forward to CLI via WebSocket
-  // Forward ALL message types from content scripts (message-type agnostic)
+  // Content script responses → forward to CLI via WebSocket ONLY if this
+  // response originated from a WebSocket request (not popup or external).
   if (sender.tab) {
-    wsSend(msg);
+    if (msg.id && wsRequestIds.has(msg.id)) {
+      wsRequestIds.delete(msg.id);
+      wsSend(msg);
+    }
+    // For streaming responses (stream_start, stream_delta, stream_done),
+    // the id stays the same across multiple messages — keep it in the set
+    // until stream_done or error.
+    if (msg.id && (msg.type === "stream_start" || msg.type === "stream_delta")) {
+      wsRequestIds.add(msg.id);
+    }
     sendResponse({ ok: true });
     return;
   }
@@ -230,22 +266,19 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
         return;
       }
 
-      // For extract_page, we can get a synchronous response
+      // For extract_page, collect the async response
       if (msg.type === "extract_page") {
-        // Set up a one-time listener for the response
-        const responsePromise = new Promise((resolve) => {
-          const id = "ext-" + Date.now();
-          msg.id = id;
+        const id = "ext-" + Date.now();
+        msg.id = id;
 
-          const handler = (response, respSender) => {
+        const responsePromise = new Promise((resolve) => {
+          const handler = (response) => {
             if (response.id === id && (response.type === "page_data" || response.type === "error")) {
               chrome.runtime.onMessage.removeListener(handler);
               resolve(response);
             }
           };
           chrome.runtime.onMessage.addListener(handler);
-
-          // Timeout after 10 seconds
           setTimeout(() => {
             chrome.runtime.onMessage.removeListener(handler);
             resolve({ type: "error", error: "Extraction timeout" });
@@ -256,7 +289,6 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
         const result = await responsePromise;
         sendResponse(result.data || result);
       } else {
-        // For other message types, just forward
         await chrome.tabs.sendMessage(tab.id, msg);
         sendResponse({ ok: true });
       }

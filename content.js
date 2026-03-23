@@ -101,6 +101,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true });
       break;
 
+    case "stop_watch":
+      if (watchInterval) { clearInterval(watchInterval); watchInterval = null; }
+      safeSend({ type: "status", id: msg.id, ok: true });
+      sendResponse({ ok: true });
+      break;
+
     default:
       safeSend({ type: "error", id: msg.id, error: `Unknown message type: ${msg.type}` });
       sendResponse({ ok: false, error: "unknown type" });
