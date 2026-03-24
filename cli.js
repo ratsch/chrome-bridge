@@ -28,10 +28,11 @@ const TOKEN_FILE = path.join(os.tmpdir(), "chatgpt-bridge-token");
 function printHelp() {
   process.stderr.write(`
 Usage: chatgpt [options] "prompt"
-       chrome-bridge --extract
+       chrome-bridge --extract [--url <url>]
 
 Options:
   -e, --extract           Extract data from the active browser tab (JSON to stdout)
+  -u, --url <url>         Navigate to URL before extracting (implies --extract)
   -f, --file <file>       Include file contents in the prompt (repeatable)
   -a, --attach <file>     Upload file to ChatGPT (PDF, images; repeatable)
   -b, --batch             Process each -f file as a separate request
@@ -41,9 +42,9 @@ Options:
   -h, --help              Show this help
 
 Examples:
-  chrome-bridge --extract                           # Extract data from active tab
+  chrome-bridge --extract                                      # Active tab
+  chrome-bridge --url https://www.homegate.ch/buy/4002078347   # Navigate + extract
   chatgpt "What is the meaning of life?"
-  chatgpt -f code.py "Review this code"
   chatgpt -a scan.pdf "OCR this document and return JSON"
 `);
 }
@@ -70,7 +71,7 @@ async function main() {
     process.exit(0);
   }
 
-  const { files, attachments, batch, extract, outputPattern, timeout, promptText } = opts;
+  const { files, attachments, batch, extract, url, outputPattern, timeout, promptText } = opts;
   const stdinData = await readStdin();
 
   // Validate we have something to send
@@ -184,7 +185,7 @@ async function main() {
         clearTimeout(connectTimer);
         process.stderr.write("[cli] Extension connected.\n");
         if (extract) {
-          await doExtract(ws, wss, timeout);
+          await doExtract(ws, wss, timeout, url);
         } else {
           await processPrompts(ws, wss, prompts, timeout);
         }
@@ -193,7 +194,33 @@ async function main() {
   });
 }
 
-async function doExtract(ws, wss, timeout) {
+async function doExtract(ws, wss, timeout, url) {
+  if (url) {
+    process.stderr.write(`[cli] Navigating to ${url}...\n`);
+    ws.send(JSON.stringify({ type: "navigate", url }));
+
+    // Wait for navigation to complete before extracting
+    await new Promise((resolve, reject) => {
+      const navTimer = setTimeout(() => reject(new Error("Navigation timeout")), 30_000);
+      const handler = (raw) => {
+        let msg;
+        try { msg = JSON.parse(raw); } catch { return; }
+        if (msg.type === "navigated" || (msg.type === "status" && msg.ready)) {
+          clearTimeout(navTimer);
+          ws.off("message", handler);
+          resolve();
+        } else if (msg.type === "error" && msg.error?.includes("navigat")) {
+          clearTimeout(navTimer);
+          ws.off("message", handler);
+          reject(new Error(msg.error));
+        }
+      };
+      ws.on("message", handler);
+    });
+    // Give the page time to render dynamic content
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+
   const id = generateId();
   process.stderr.write("[cli] Extracting page data...\n");
   ws.send(JSON.stringify({ type: "extract_page", id }));

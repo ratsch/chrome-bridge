@@ -84,6 +84,13 @@ function connect(url, token) {
     }
 
     log(`CLI → ${msg.type}: ${(msg.text || msg.selector || msg.url || "").slice(0, 60)}`);
+
+    // Handle navigate in background (tab API, not content script)
+    if (msg.type === "navigate") {
+      handleNavigate(msg);
+      return;
+    }
+
     forwardToContentScript(msg);
   };
 }
@@ -99,6 +106,41 @@ function disconnect() {
 function wsSend(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(obj));
+  }
+}
+
+// ── Forward to content script ───────────────────────────────────────────────
+
+// ── Navigate ────────────────────────────────────────────────────────────────
+
+async function handleNavigate(msg) {
+  const { url } = msg;
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab) {
+      await chrome.tabs.update(activeTab.id, { url });
+    } else {
+      await chrome.tabs.create({ url });
+    }
+    log(`Navigated to ${url}`);
+
+    // Wait for page load, then notify CLI
+    const listener = (tabId, info) => {
+      if (info.status === "complete" && activeTab && tabId === activeTab.id) {
+        chrome.tabs.onUpdated.removeListener(listener);
+        wsSend({ type: "navigated", url });
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+
+    // Timeout: send navigated even if onUpdated doesn't fire
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      wsSend({ type: "navigated", url });
+    }, 15000);
+  } catch (err) {
+    log(`Navigate failed: ${err.message}`);
+    wsSend({ type: "error", error: `Navigation failed: ${err.message}` });
   }
 }
 
