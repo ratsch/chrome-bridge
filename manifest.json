@@ -63,7 +63,7 @@
         "https://www.teresas-homes.ch/*",
         "https://www.ginesta.ch/*"
       ],
-      "js": ["content.js", "extractors/shared.js", "extractors/swiss-broker.js"],
+      "js": ["content.js", "extractors/shared.js", "extractors/homegate.js", "extractors/swiss-broker.js"],
       "run_at": "document_idle"
     }
   ],
