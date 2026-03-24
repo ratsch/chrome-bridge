@@ -116,28 +116,35 @@ function wsSend(obj) {
 async function handleNavigate(msg) {
   const { url } = msg;
   try {
+    let targetTabId;
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (activeTab) {
       await chrome.tabs.update(activeTab.id, { url });
+      targetTabId = activeTab.id;
     } else {
-      await chrome.tabs.create({ url });
+      const newTab = await chrome.tabs.create({ url });
+      targetTabId = newTab.id;
     }
     log(`Navigated to ${url}`);
 
-    // Wait for page load, then notify CLI
+    // Wait for page load, then notify CLI (once only)
+    let sent = false;
+    const notify = () => {
+      if (sent) return;
+      sent = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      wsSend({ type: "navigated", url });
+    };
+
     const listener = (tabId, info) => {
-      if (info.status === "complete" && activeTab && tabId === activeTab.id) {
-        chrome.tabs.onUpdated.removeListener(listener);
-        wsSend({ type: "navigated", url });
+      if (tabId === targetTabId && info.status === "complete") {
+        notify();
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
 
     // Timeout: send navigated even if onUpdated doesn't fire
-    setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      wsSend({ type: "navigated", url });
-    }, 15000);
+    setTimeout(notify, 15000);
   } catch (err) {
     log(`Navigate failed: ${err.message}`);
     wsSend({ type: "error", error: `Navigation failed: ${err.message}` });

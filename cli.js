@@ -299,6 +299,8 @@ function sendAndWait(ws, text, timeout, attachments) {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
 
+      if (msg.id && msg.id !== id) return; // ignore messages for other requests
+
       if (msg.type === "stream_start") {
         process.stderr.write("[cli] ChatGPT is responding...\n");
       } else if (msg.type === "stream_delta") {

@@ -46,6 +46,7 @@ function safeSend(msg) {
   } catch (err) {
     console.warn("[chrome-bridge:chatgpt] Send failed:", err.message);
     stopWatching();
+    idle = true; // reset so future send_message calls aren't blocked
     return false;
   }
 }
