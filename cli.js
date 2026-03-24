@@ -169,8 +169,8 @@ async function main() {
 
   wss.on("connection", (ws, req) => {
     // Verify auth token from query string
-    const url = new URL(req.url, `http://localhost:${PORT}`);
-    const clientToken = url.searchParams.get("token");
+    const connUrl = new URL(req.url, `http://localhost:${PORT}`);
+    const clientToken = connUrl.searchParams.get("token");
     if (clientToken !== token) {
       process.stderr.write("[cli] Rejected connection: invalid token\n");
       ws.close(1008, "Invalid token");
