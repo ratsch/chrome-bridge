@@ -217,8 +217,9 @@
     return result;
   }
 
-  // Register with dispatcher
-  bridge.extractors["www.homegate.ch"] = {
+  // Register under canonical key (dispatcher strips www. before lookup)
+  bridge.extractors["homegate.ch"] = {
+    name: "homegate",
     extract: extract,
     handlers: {},
   };

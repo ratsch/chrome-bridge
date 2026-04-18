@@ -302,10 +302,15 @@ async function fillInput(el, text) {
       document.execCommand("insertText", false, text);
     }
 
-    // Final fallback
+    // Final fallback: build <p> nodes safely to avoid HTML injection from user prompt
     if (!el.textContent.includes(text.slice(0, 20))) {
       console.log("[chrome-bridge:chatgpt] Direct text insertion as final fallback");
-      el.innerHTML = `<p>${text.replace(/\n/g, '</p><p>')}</p>`;
+      while (el.firstChild) el.removeChild(el.firstChild);
+      for (const line of text.split("\n")) {
+        const p = document.createElement("p");
+        p.textContent = line;
+        el.appendChild(p);
+      }
       el.dispatchEvent(new InputEvent("input", {
         bubbles: true,
         inputType: "insertText",
@@ -329,6 +334,7 @@ async function fillInput(el, text) {
 
 function watchForResponse(requestId, knownIds) {
   stopWatching();
+  emitDelta._prevText = ""; // reset per-session state
 
   const startedAt = Date.now();
   const TIMEOUT = 60 * 60 * 1000;
@@ -549,9 +555,13 @@ async function handleFetchApi(msg) {
     if (url.includes("/gizmos/")) {
       delete opts.headers["openai-account-id"];
     }
-    if (body) {
-      opts.headers["Content-Type"] = "application/json";
-      opts.body = JSON.stringify(body);
+    if (body !== undefined && body !== null) {
+      if (typeof body === "string") {
+        opts.body = body;
+      } else {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(body);
+      }
     }
     const resp = await fetch(url, opts);
     const contentType = resp.headers.get("content-type") || "";

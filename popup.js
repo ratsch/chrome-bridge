@@ -14,6 +14,8 @@ const wsStatus = document.getElementById("ws-status");
 const logEl = document.getElementById("log");
 
 let lastExtracted = null;
+let pendingExtractId = null;
+let pendingExtractTimer = null;
 
 // ── Page info ───────────────────────────────────────────────────────────────
 
@@ -38,6 +40,12 @@ async function doExtract() {
   dataSection.classList.add("hidden");
   emptySection.classList.add("hidden");
 
+  // Clear any previous pending extract
+  if (pendingExtractTimer) clearTimeout(pendingExtractTimer);
+
+  const id = "popup-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
+  pendingExtractId = id;
+
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) {
@@ -45,16 +53,18 @@ async function doExtract() {
       return;
     }
 
-    // Send extract_page to the content script and listen for page_data response
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      type: "extract_page",
-      id: "popup-" + Date.now(),
-    });
+    await chrome.tabs.sendMessage(tab.id, { type: "extract_page", id });
 
-    // The content script responds with { ok: true } immediately,
-    // and sends the data via chrome.runtime.sendMessage.
-    // We need to listen for it.
+    // Timeout if no page_data arrives
+    pendingExtractTimer = setTimeout(() => {
+      if (pendingExtractId === id) {
+        pendingExtractId = null;
+        pageExtractor.textContent = "Extract timed out";
+        showEmpty();
+      }
+    }, 10_000);
   } catch (err) {
+    pendingExtractId = null;
     pageExtractor.textContent = "No content script on this page";
     showEmpty();
   }
@@ -62,9 +72,16 @@ async function doExtract() {
 
 // Listen for page_data responses from content script
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "page_data" && msg.id && msg.id.startsWith("popup-")) {
+  if (msg.type === "page_data" && msg.id === pendingExtractId) {
+    if (pendingExtractTimer) clearTimeout(pendingExtractTimer);
+    pendingExtractId = null;
     lastExtracted = msg.data;
     showData(msg.data);
+  } else if (msg.type === "error" && msg.id === pendingExtractId) {
+    if (pendingExtractTimer) clearTimeout(pendingExtractTimer);
+    pendingExtractId = null;
+    pageExtractor.textContent = `Error: ${msg.error}`;
+    showEmpty();
   }
 });
 

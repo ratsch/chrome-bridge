@@ -54,6 +54,7 @@ function connect(url, token) {
     connected = false;
     stopKeepAlive();
     ws = null;
+    wsRequestIds.clear(); // prevent stale IDs from leaking to new connections
     if (ev.code !== 4000) {
       setTimeout(() => {
         chrome.storage.local.get(["relayUrl", "authToken"], (data) => {
@@ -101,6 +102,7 @@ function disconnect() {
     ws = null;
   }
   connected = false;
+  wsRequestIds.clear(); // prevent stale IDs from leaking to new connections
 }
 
 function wsSend(obj) {
@@ -142,6 +144,15 @@ async function handleNavigate(msg) {
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
+
+    // If the tab already reached "complete" before the listener was attached
+    // (possible on fast-loading / cached pages), notify immediately.
+    try {
+      const currentTab = await chrome.tabs.get(targetTabId);
+      if (currentTab.status === "complete" && currentTab.url === url) {
+        notify();
+      }
+    } catch {}
 
     // Timeout: send navigated even if onUpdated doesn't fire
     setTimeout(notify, 15000);

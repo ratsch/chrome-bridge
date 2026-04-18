@@ -205,7 +205,7 @@ async function doExtract(ws, wss, timeout, url) {
       const handler = (raw) => {
         let msg;
         try { msg = JSON.parse(raw); } catch { return; }
-        if (msg.type === "navigated" || (msg.type === "status" && msg.ready)) {
+        if (msg.type === "navigated" && msg.url === url) {
           clearTimeout(navTimer);
           ws.off("message", handler);
           resolve();
@@ -235,12 +235,15 @@ async function doExtract(ws, wss, timeout, url) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
+    // Only accept messages for our request id
+    if (msg.id && msg.id !== id) return;
+
     if (msg.type === "page_data") {
       clearTimeout(responseTimer);
       process.stdout.write(JSON.stringify(msg.data, null, 2) + "\n");
       wss.close();
       process.exit(0);
-    } else if (msg.type === "error" && msg.id === id) {
+    } else if (msg.type === "error") {
       clearTimeout(responseTimer);
       process.stderr.write(`[cli] Error: ${msg.error}\n`);
       wss.close();

@@ -103,8 +103,13 @@
     "teresas-homes.ch", "ginesta.ch",
   ];
 
+  // Only register for hosts that don't have a site-specific extractor yet.
+  // This way site-specific extractors (e.g., homegate.js) aren't overwritten,
+  // regardless of manifest load order.
   for (const host of SWISS_PROPERTY_HOSTS) {
-    bridge.extractors[host] = { name: "swiss-broker", extract };
+    if (!bridge.extractors[host]) {
+      bridge.extractors[host] = { name: "swiss-broker", extract };
+    }
   }
 
   console.log("[chrome-bridge:swiss-broker] Extractor registered for", SWISS_PROPERTY_HOSTS.length, "sites");

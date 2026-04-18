@@ -42,9 +42,11 @@ function getExtractor() {
   // Try with www prefix
   if (extractors["www." + hostname]) return extractors["www." + hostname];
 
-  // Subdomain match (e.g., "homegate.ch" matches "www.homegate.ch")
+  // Subdomain match: only match if key is a parent domain (with dot boundary).
+  // "evil-homegate.ch" must NOT match "homegate.ch"; "sub.homegate.ch" must.
   for (const key of Object.keys(extractors)) {
-    if (hostname.endsWith(key) || key.endsWith(hostname)) {
+    const stripped = key.replace(/^www\./, "");
+    if (hostname === stripped || hostname.endsWith("." + stripped)) {
       return extractors[key];
     }
   }
