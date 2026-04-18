@@ -202,7 +202,7 @@ CLI starts WebSocket SERVER on port 9223
 ### Channel 2: chrome.runtime messaging (for web apps)
 
 ```
-Web app (property portal at your-app.example.com)
+Web app (property portal at your whitelisted origin)
   → chrome.runtime.sendMessage (externally_connectable) → background.js
   → background.js routes to content script in the active tab
   → content script extracts/injects via DOM
@@ -257,7 +257,6 @@ User clicks extension icon
 
   "externally_connectable": {
     "matches": [
-      "https://your-app.example.com/*",
       "https://your-app.example.com/*",
       "http://localhost:*/*"
     ]
@@ -356,7 +355,7 @@ chrome-bridge extract  # → prints JSON to stdout
 ### Consumer 2: Property Portal Frontend
 
 ```javascript
-// In the portal's React/Next.js code (your-app.example.com)
+// In the portal's React/Next.js code (your whitelisted origin)
 // Uses chrome.runtime.sendMessage with the extension ID
 
 const EXTENSION_ID = "abcdef...";  // Set during extension install

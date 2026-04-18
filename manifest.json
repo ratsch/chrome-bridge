@@ -30,8 +30,6 @@
 
   "externally_connectable": {
     "matches": [
-      "https://your-app.example.com/*",
-      "https://your-app.example.com/*",
       "http://localhost:*/*"
     ]
   },

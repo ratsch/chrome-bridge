@@ -14,7 +14,18 @@ const PORT = 9223;
 const args = process.argv.slice(2);
 const url = args.find(a => a.startsWith("http"));
 const wait = parseInt(args[args.indexOf("--wait") + 1] || "5") * 1000;
-const token = args[args.indexOf("--token") + 1] || "test123";
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const TOKEN_FILE = path.join(os.tmpdir(), "chatgpt-bridge-token");
+let tokenFromFile = null;
+try { tokenFromFile = fs.readFileSync(TOKEN_FILE, "utf8").trim() || null; } catch {}
+const tokenArg = args.indexOf("--token");
+const token = (tokenArg >= 0 ? args[tokenArg + 1] : null) || process.env.CHATGPT_BRIDGE_TOKEN || tokenFromFile;
+if (!token) {
+  process.stderr.write("[nav] No auth token found. Provide --token or run 'chatgpt \"test\"' first.\n");
+  process.exit(1);
+}
 
 if (!url) {
   process.stderr.write("Usage: node nav-extract.js <url> [--wait <seconds>] [--token <token>]\n");
