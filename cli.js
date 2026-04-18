@@ -184,10 +184,18 @@ async function main() {
       if (msg.type === "hello" && msg.client === "chatgpt-bridge") {
         clearTimeout(connectTimer);
         process.stderr.write("[cli] Extension connected.\n");
-        if (extract) {
-          await doExtract(ws, wss, timeout, url);
-        } else {
-          await processPrompts(ws, wss, prompts, timeout);
+        try {
+          if (extract) {
+            // Use a shorter timeout for extract (default 60s), unless user overrode with --timeout
+            const extractTimeout = timeout === 60 * 60_000 ? 60_000 : timeout;
+            await doExtract(ws, wss, extractTimeout, url);
+          } else {
+            await processPrompts(ws, wss, prompts, timeout);
+          }
+        } catch (err) {
+          process.stderr.write(`[cli] ${err.message}\n`);
+          wss.close();
+          process.exit(1);
         }
       }
     });

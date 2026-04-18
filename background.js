@@ -22,6 +22,18 @@ const RECONNECT_DELAY = 1000;
 const wsRequestIds = new Set();
 const WS_ID_MAX = 500;
 
+// Precompile host_permissions → regex once (not per message).
+const HOST_PATTERNS = (() => {
+  try {
+    const manifest = chrome.runtime.getManifest();
+    return (manifest.host_permissions || []).map(p =>
+      new RegExp("^" + p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, ".*") + "$")
+    );
+  } catch {
+    return [];
+  }
+})();
+
 function log(msg) {
   const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
   logLines.push(line);
@@ -218,13 +230,8 @@ async function forwardWsMessage(msg) {
 }
 
 async function forwardToActiveTab(msg) {
-  const manifest = chrome.runtime.getManifest();
-  const patterns = (manifest.host_permissions || []).map(p =>
-    new RegExp(p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, ".*"))
-  );
-
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (activeTab && activeTab.url && patterns.some(p => p.test(activeTab.url))) {
+  if (activeTab && activeTab.url && HOST_PATTERNS.some(p => p.test(activeTab.url))) {
     try {
       await chrome.tabs.sendMessage(activeTab.id, msg);
       log("Message forwarded to active tab");
@@ -246,12 +253,13 @@ async function forwardToActiveTab(msg) {
   // Last resort: any matching tab
   const tabs = await chrome.tabs.query({ currentWindow: true });
   const matchingTab = tabs.find(t =>
-    t.url && patterns.some(p => p.test(t.url))
+    t.url && HOST_PATTERNS.some(p => p.test(t.url))
   );
 
   if (!matchingTab) {
     log("No matching tab found!");
     wsSend({ type: "error", id: msg.id, error: "No matching tab open" });
+    if (msg.id) wsRequestIds.delete(msg.id);
     return;
   }
 
@@ -271,6 +279,7 @@ async function forwardToActiveTab(msg) {
     } catch (err2) {
       log(`Failed: ${err2.message}`);
       wsSend({ type: "error", id: msg.id, error: err2.message });
+      if (msg.id) wsRequestIds.delete(msg.id);
     }
   }
 }
